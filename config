@@ -1,0 +1,14 @@
+#Put it into "~/.ssh/config"
+
+Host ensta-ssh
+  HostName ssh.ensta.fr
+  User de-oliveira-marim
+
+Host rpi2b-dev
+  HostName 147.250.8.198
+  User l.de-oliveira-marim
+
+Host rpi2b-dev-remote
+  HostName 147.250.8.198
+  User l.de-oliveira-marim
+  ProxyJump ensta-ssh
