@@ -1,0 +1,183 @@
+#!/bin/bash
+
+# ===== CONFIGURATION =====
+COMPILER="arm-linux-g++"
+CFLAGS="-Wall -Wextra -std=c++17"
+LDFLAGS=""
+RPI_USER="root"
+RPI_IP="192.168.50.49"
+RPI_PATH="/tmp"
+SOURCES=()
+OUTPUT="arm-exec.out"
+VERBOSE=0
+CLEAN_AFTER=0
+
+# ===== COLORS FOR OUTPUT =====
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# ===== HELPER FUNCTIONS =====
+print_error() {
+    echo -e "${RED}❌ $1${NC}" >&2
+}
+
+print_success() {
+    echo -e "${GREEN}✅ $1${NC}"
+}
+
+print_info() {
+    echo -e "${BLUE}ℹ️  $1${NC}"
+}
+
+print_warning() {
+    echo -e "${YELLOW}⚠️  $1${NC}"
+}
+
+# ===== PARSE ARGUMENTS =====
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o)
+            OUTPUT="$2"
+            shift 2
+            ;;
+        -std=*)
+            CFLAGS+=" $1"
+            shift
+            ;;
+        -l*)
+            LDFLAGS+=" $1"
+            shift
+            ;;
+        -O*)
+            CFLAGS+=" $1"
+            shift
+            ;;
+        -g)
+            CFLAGS+=" -g"
+            shift
+            ;;
+        -v|--verbose)
+            VERBOSE=1
+            shift
+            ;;
+        --clean)
+            CLEAN_AFTER=1
+            shift
+            ;;
+        --no-run)
+            NO_RUN=1
+            shift
+            ;;
+        *.cpp|*.cc|*.cxx)
+            SOURCES+=("$1")
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: $0 [options] files.cpp -o binary_name"
+            echo ""
+            echo "Options:"
+            echo "  -o <name>      Output binary name"
+            echo "  -std=<std>     C++ standard (e.g., -std=c++17)"
+            echo "  -l<lib>        Libraries to link"
+            echo "  -O<level>      Optimization level"
+            echo "  -g             Include debug symbols"
+            echo "  -v, --verbose  Verbose mode"
+            echo "  --clean        Remove local binary after transfer"
+            echo "  --no-run       Only compile and transfer, don't execute"
+            echo "  -h, --help     Show this help"
+            exit 0
+            ;;
+        *)
+            print_error "Invalid argument: $1"
+            echo "Use -h for help"
+            exit 1
+            ;;
+    esac
+done
+
+# ===== VALIDATION =====
+if [ ${#SOURCES[@]} -eq 0 ]; then
+    print_error "No source files specified!"
+    echo "Usage: $0 file.cpp -o binary_name"
+    exit 1
+fi
+
+# Check if compiler exists
+if ! command -v $COMPILER &> /dev/null; then
+    print_error "Compiler $COMPILER not found!"
+    print_info "Install with: sudo apt install g++-arm-linux-gnueabihf"
+    exit 1
+fi
+
+# Check connectivity with Raspberry Pi
+print_info "Checking connection to Raspberry Pi..."
+if ! ping -c 1 -W 2 "$RPI_IP" &> /dev/null; then
+    print_warning "Raspberry Pi not responding to ping"
+fi
+
+# ===== COMPILATION =====
+echo ""
+print_info "Compiling ${#SOURCES[@]} file(s)..."
+[ $VERBOSE -eq 1 ] && echo "Command: $COMPILER $CFLAGS ${SOURCES[*]} $LDFLAGS -o $OUTPUT"
+
+if $COMPILER $CFLAGS "${SOURCES[@]}" $LDFLAGS -o "$OUTPUT"; then
+    print_success "Compilation successful!"
+else
+    print_error "Compilation failed"
+    exit 1
+fi
+
+# Show binary size
+SIZE=$(du -h "$OUTPUT" | cut -f1)
+print_info "Binary size: $SIZE"
+
+# ===== TRANSFER =====
+echo ""
+print_info "Transferring to $RPI_USER@$RPI_IP:$RPI_PATH..."
+
+if [ $VERBOSE -eq 1 ]; then
+    rsync -avz --progress "$OUTPUT" "$RPI_USER@$RPI_IP:$RPI_PATH/" || {
+        print_error "Transfer failed"
+        exit 1
+    }
+else
+    rsync -az "$OUTPUT" "$RPI_USER@$RPI_IP:$RPI_PATH/" || {
+        print_error "Transfer failed"
+        exit 1
+    }
+fi
+
+print_success "Binary transferred!"
+
+# ===== LOCAL CLEANUP (OPTIONAL) =====
+if [ $CLEAN_AFTER -eq 1 ]; then
+    rm -f "$OUTPUT"
+    print_info "Local binary removed"
+fi
+
+# ===== REMOTE EXECUTION =====
+if [ -z "$NO_RUN" ]; then
+    echo ""
+    print_info "Executing on Raspberry Pi..."
+    echo "----------------------------------------"
+    
+    ssh -t "$RPI_USER@$RPI_IP" "
+        cd $RPI_PATH &&
+        chmod +x $OUTPUT &&
+        ./$OUTPUT
+    " || {
+        print_error "Remote execution failed"
+        exit 1
+    }
+    
+    echo "----------------------------------------"
+    print_success "Execution completed!"
+else
+    print_info "Execution skipped (--no-run)"
+fi
+
+echo ""
+print_success "Process complete! 🎉"
